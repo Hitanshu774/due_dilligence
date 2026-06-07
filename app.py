@@ -1,6 +1,7 @@
 import gradio as gr
 import os
 from dotenv import load_dotenv
+from langsmith import traceable
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,6 +18,7 @@ from graph import compiled_graph
 # ==========================================
 # 1. EXECUTION FUNCTION
 # ==========================================
+
 def run_due_diligence(user_query: str):
     
     # 1. Setup the initial state
