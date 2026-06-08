@@ -6,8 +6,6 @@ import glob
 from dotenv import load_dotenv
 
 # Standard Langchain Imports
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, JSONLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -29,6 +27,8 @@ from pinecone import Pinecone, ServerlessSpec
 # =========================================
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_core.stores import InMemoryStore
+from langchain_classic.retrievers import ParentDocumentRetriever
 
 load_dotenv(override=True)
 
@@ -56,9 +56,9 @@ loader = JSONLoader(
 documents = loader.load()
 print(f"Loaded {len(documents)} documents from small corpus")
 
-textsplitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-chunks = textsplitter.split_documents(documents)
-print(f"Split into {len(chunks)} chunks")
+# textsplitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+# chunks = textsplitter.split_documents(documents)
+# print(f"Split into {len(chunks)} chunks")
 
 
 # ====================================================================
@@ -73,7 +73,7 @@ embeddings = HuggingFaceEmbeddings(
 
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
-index_name = "gov-docs-index-small" 
+index_name = "gov-docs-hierarchical" 
 
 if not pc.has_index(index_name):
     print(f"Creating new Pinecone index '{index_name}'...")
@@ -84,12 +84,30 @@ if not pc.has_index(index_name):
         spec=ServerlessSpec(cloud="aws", region="us-east-1")
     )
 
-print(f"Pushing {len(chunks)} chunks to Pinecone index: '{index_name}'...")
-vectorstore = PineconeVectorStore.from_documents(
-    documents=chunks,
-    embedding=embeddings,
-    index_name=index_name
+# Initialize empty VectorStore (for storing small child chunks)
+vectorstore = PineconeVectorStore(
+    index_name=index_name,
+    embedding=embeddings
 )
+# Initialize In-Memory Document Store (for storing large parent chunks)
+store = InMemoryStore()
+
+# Define Parent and Child Splitters
+parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+child_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=50)
+
+print("Setting up ParentDocumentRetriever and processing documents...")
+parent_retriever = ParentDocumentRetriever(
+    vectorstore=vectorstore,
+    docstore=store,
+    child_splitter=child_splitter,
+    parent_splitter=parent_splitter,
+    search_kwargs={"k": 10} # Retrieve top 10 child hits to map back to parents
+)
+
+# This handles splitting into parents, then children, and pushing children to Pinecone
+parent_retriever.add_documents(documents)
+print("✅ Hierarchical chunks generated and stored!")
 
 
 # ====================================================================
