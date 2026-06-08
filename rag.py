@@ -10,7 +10,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import DirectoryLoader, TextLoader, JSONLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_openai import ChatOpenAI
 from langchain_openrouter import ChatOpenRouter
 from langchain_pinecone import PineconeVectorStore
 
@@ -27,8 +26,14 @@ from pinecone import Pinecone, ServerlessSpec
 # =========================================
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langchain_core.rate_limiters import InMemoryRateLimiter
+
+# NEW IMPORTS FOR PARENT-CHILD CHUNKING
 from langchain_core.stores import InMemoryStore
 from langchain_classic.retrievers import ParentDocumentRetriever
+
+# NEW IMPORTS FOR LLMLINGUA & PIPELINE COMPRESSION
+from langchain_community.document_compressors import LLMLinguaCompressor
+from langchain_classic.retrievers.document_compressors import DocumentCompressorPipeline
 
 load_dotenv(override=True)
 
@@ -62,7 +67,7 @@ print(f"Loaded {len(documents)} documents from small corpus")
 
 
 # ====================================================================
-# 3. GENERATE EMBEDDINGS & PUSH TO PINECONE
+# 3. HIERARCHICAL CHUNKING & PINECONE SETUP
 # ====================================================================
 print("Initializing CPU-friendly embedding model...")
 embeddings = HuggingFaceEmbeddings(
@@ -73,7 +78,7 @@ embeddings = HuggingFaceEmbeddings(
 
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
-index_name = "gov-docs-hierarchical" 
+index_name = "gov-docs-hierarchical-1" 
 
 if not pc.has_index(index_name):
     print(f"Creating new Pinecone index '{index_name}'...")
@@ -111,16 +116,30 @@ print("✅ Hierarchical chunks generated and stored!")
 
 
 # ====================================================================
-# 4. RERANKER SETUP
+# 4. RERANKER & LLMLINGUA COMPRESSION SETUP
 # ====================================================================
 print("Initializing Cross-Encoder Reranker...")
-base_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 10})
 cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-compressor = CrossEncoderReranker(model=cross_encoder, top_n=3)
+# Renamed from 'compressor' to 'reranker' for clarity in the pipeline
+reranker = CrossEncoderReranker(model=cross_encoder, top_n=3)
 
+print("Initializing LLMLingua Compressor...")
+# Using a smaller, CPU-friendly model for LLMLingua 
+llm_lingua_compressor = LLMLinguaCompressor(
+    model_name="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+    device_map="cpu",
+    target_token=300 # Compresses the total context down to around 300 tokens
+)
+
+# Chain the Reranker and the LLMLingua compressor together
+pipeline_compressor = DocumentCompressorPipeline(
+    transformers=[reranker, llm_lingua_compressor]
+)
+
+# Wrap the ParentDocumentRetriever with the combined pipeline
 compression_retriever = ContextualCompressionRetriever(
-    base_compressor=compressor, 
-    base_retriever=base_retriever
+    base_compressor=pipeline_compressor, 
+    base_retriever=parent_retriever
 )
 
 
