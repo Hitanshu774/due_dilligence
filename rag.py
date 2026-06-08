@@ -128,8 +128,8 @@ primary_llm = ChatOpenRouter(
 
 # C. Fallback Model
 # If OpenRouter is down or hits hard limits, it will instantly reroute to OpenAI
-fallback_llm = ChatOpenAI(
-    model="gpt-3.5-turbo",       # Can be swapped for AzureOpenAI, Gemini, etc.
+fallback_llm = ChatOpenRouter(
+    model="nex-agi/nex-n2-pro:free",       # Can be swapped for AzureOpenAI, Gemini, etc.
     temperature=0.1,
     max_retries=3,
     rate_limiter=rate_limiter
