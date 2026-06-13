@@ -1,3 +1,4 @@
+
 # ====================================================================
 # QUERY SCRIPT (Run Multiple Times)
 # ====================================================================
@@ -12,17 +13,23 @@ from langchain_openai import ChatOpenAI
 from langchain_openrouter import ChatOpenRouter
 from pinecone import Pinecone
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 # Parent-Child
 from langchain_classic.retrievers import ParentDocumentRetriever
 from langchain_community.storage import RedisStore
 from langchain_classic.storage import EncoderBackedStore
 from langchain_core.documents import Document
 
+# Custom Wrapper Imports
+from typing import Sequence, Any, Optional
+from langchain_core.callbacks import Callbacks
+from langchain_core.documents import BaseDocumentCompressor
+from llmlingua import PromptCompressor
+
 # Reranker & Compression
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_classic.retrievers import ContextualCompressionRetriever
 from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
-from langchain_community.document_compressors import LLMLinguaCompressor
 from langchain_classic.retrievers.document_compressors import DocumentCompressorPipeline
 
 # Reliability
@@ -30,6 +37,36 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from langchain_core.rate_limiters import InMemoryRateLimiter
 
 load_dotenv(override=True)
+
+# --- CUSTOM LLMLINGUA-2 WRAPPER ---
+class LLMLingua2Compressor(BaseDocumentCompressor):
+    """Custom LangChain wrapper to properly support LLMLingua-2 architecture."""
+    target_token: int = 600
+    compressor: Any = None
+    
+    class Config:
+        arbitrary_types_allowed = True
+        
+    def compress_documents(
+        self, documents: Sequence[Document], query: str, callbacks: Optional[Callbacks] = None
+    ) -> Sequence[Document]:
+        if not documents:
+            return []
+        
+        # Extract page content
+        contexts = [doc.page_content for doc in documents]
+        
+        # Compress using the underlying llmlingua library
+        compressed = self.compressor.compress_prompt(
+            context=contexts,
+            instruction="",
+            question=query,
+            target_token=self.target_token,
+        )
+        
+        # Return compressed text properly wrapped in a LangChain Document
+        return [Document(page_content=compressed["compressed_prompt"])]
+
 
 # 1. LOAD PERSISTED STORES
 print("Connecting to Vector DB and Document Store...")
@@ -73,10 +110,18 @@ print("Initializing Compression Pipeline...")
 cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
 reranker = CrossEncoderReranker(model=cross_encoder, top_n=5)
 
-llm_lingua_compressor = LLMLinguaCompressor(
+print("Loading LLMLingua-2 Engine (this may take a moment)...")
+# Safely initialize the actual LLMLingua library directly to bypass LangChain's bug
+llmlingua2_engine = PromptCompressor(
     model_name="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
-    device_map="cpu",
-    target_token=600
+    use_llmlingua2=True,
+    device_map="cpu"
+)
+
+# Use our custom wrapper
+llm_lingua_compressor = LLMLingua2Compressor(
+    target_token=600,
+    compressor=llmlingua2_engine
 )
 
 pipeline_compressor = DocumentCompressorPipeline(
@@ -137,7 +182,7 @@ def answer_question_with_reranking(question: str, metadata_filter: dict = None):
     try:
         # Pass the filter down to our robust retrieval function
         docs = robust_retrieve(question, metadata_filter)
-        print(f"[*] Retrieved & Compressed down to {len(docs)} highly relevant documents.")
+        print(f"[*] Retrieved & Compressed down to highly relevant documents.")
     except Exception as e:
         print(f"[!] Retrieval failed: {e}")
         return
@@ -167,11 +212,9 @@ if __name__ == "__main__":
     print("--- Example 1: Unfiltered Query ---")
     answer_question_with_reranking(test_question)
     
-    # Example 2: Query with Metadata Filtering
-    # This will strictly limit Pinecone vector matches to chunks where the 'agency' is 'CDC' and 'year' is '2023'
-    print("\n--- Example 2: Filtered Query ---")
-    answer_question_with_reranking(
-        test_question, 
-        # metadata_filter={"agency": "CDC"} 
-    )
-
+    # # Example 2: Query with Metadata Filtering
+    # print("\n--- Example 2: Filtered Query ---")
+    # answer_question_with_reranking(
+    #     test_question, 
+    #     metadata_filter={"agency": "CDC"} 
+    # )
