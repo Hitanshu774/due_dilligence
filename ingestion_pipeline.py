@@ -1,13 +1,17 @@
-
-# ====================================================================
-# INGESTION SCRIPT (Generalized for API use)
-# ====================================================================
 import os
 import json
 import hashlib
+import shutil
 from typing import List
 from dotenv import load_dotenv
 
+# FastAPI Imports
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import HTMLResponse
+import uvicorn
+
+# LangChain Imports
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
@@ -19,10 +23,47 @@ from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv(override=True)
 
+# Create the FastAPI App
+app = FastAPI(title="RAG Ingestion API")
+
+# --- DIRECT HTML UPLOAD PAGE ---
+@app.get("/")
+async def root():
+    """Serves a simple HTML UI for uploading files directly from the browser."""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+        <head>
+            <title>RAG Document Ingestion</title>
+            <style>
+                body { font-family: sans-serif; margin: 40px; display: flex; justify-content: center; background-color: #f4f4f9; }
+                .container { background: white; border: 1px solid #ccc; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px; width: 100%; }
+                h2 { margin-top: 0; color: #333; }
+                p { color: #666; margin-bottom: 20px; }
+                input[type=file] { margin-bottom: 20px; width: 100%; }
+                .btn { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
+                .btn:hover { background-color: #0056b3; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h2>RAG Pipeline Ingestion</h2>
+                <p>Select a PDF file to chunk, embed, and ingest into Pinecone and Redis.</p>
+                <form action="/ingest/" enctype="multipart/form-data" method="post">
+                    <input name="file" type="file" accept=".pdf" required>
+                    <button class="btn" type="submit">Upload & Ingest</button>
+                </form>
+            </div>
+        </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+# --- YOUR INGESTION LOGIC ---
 def ingest_documents(documents: List[Document]):
     """
     Generalized ingestion function. 
-    Accepts a list of LangChain Document objects, making it easy to integrate with FastAPI endpoints.
+    Accepts a list of LangChain Document objects.
     """
     if not documents:
         print("No documents provided for ingestion.")
@@ -120,55 +161,33 @@ def ingest_documents(documents: List[Document]):
     
     print("✅ Ingestion complete!")
 
+# --- FASTAPI FILE UPLOAD ENDPOINT ---
+@app.post("/ingest/")
+async def ingest_endpoint(file: UploadFile = File(...)):
+    # 1. Save uploaded file temporarily
+    file_path = f"temp_{file.filename}"
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    # 2. Use the right LangChain loader based on file extension
+    try:
+        if file.filename.endswith(".pdf"):
+            loader = PyPDFLoader(file_path)
+            documents = loader.load()
+        else:
+            return {"error": "Currently only PDF files are supported."}
+            
+        # 3. Pass directly to your newly generalized ingestion function!
+        ingest_documents(documents)
+        
+        return {"message": f"Successfully ingested {len(documents)} document pages!"}
+        
+    finally:
+        # 4. Clean up the temporary file so we don't fill up the disk
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# --- STARTUP COMMAND ---
 if __name__ == "__main__":
-    # Example usage: This block simulates what your FastAPI endpoint will do.
-    # It handles loading the files and then passes the loaded documents to the pipeline.
-    from langchain_community.document_loaders import JSONLoader
-    
-    huge_file = "corpus.jsonl"
-    small_file = "small_corpus.jsonl"
-    lines_to_keep = 50
-
-    if os.path.exists(huge_file):
-        print(f"Extracting first {lines_to_keep} lines from {huge_file}...")
-        with open(huge_file, "r", encoding="utf-8") as infile, \
-             open(small_file, "w", encoding="utf-8") as outfile:
-            for i, line in enumerate(infile):
-                if i >= lines_to_keep:
-                    break
-                outfile.write(line)
-
-        loader = JSONLoader(
-            file_path=small_file,
-            jq_schema=".text",
-            json_lines=True
-        )
-        loaded_docs = loader.load()
-        
-        # Call the generalized function
-        ingest_documents(loaded_docs)
-    else:
-        print(f"File {huge_file} not found. Please provide valid documents to ingest.")
-        
-        
-# from fastapi import FastAPI, UploadFile, File
-# from langchain_community.document_loaders import PyPDFLoader
-# import shutil
-
-# app = FastAPI()
-
-# @app.post("/ingest/")
-# async def ingest_endpoint(file: UploadFile = File(...)):
-#     # 1. Save uploaded file temporarily
-#     file_path = f"temp_{file.filename}"
-#     with open(file_path, "wb") as buffer:
-#         shutil.copyfileobj(file.file, buffer)
-    
-#     # 2. Use the right LangChain loader based on file extension
-#     loader = PyPDFLoader(file_path)
-#     documents = loader.load()
-    
-#     # 3. Pass directly to your newly generalized ingestion function!
-#     ingest_documents(documents)
-    
-#     return {"message": f"Successfully ingested {len(documents)} documents!"}
+    print("Starting FastAPI Ingestion Server...")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
