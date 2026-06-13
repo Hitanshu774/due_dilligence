@@ -4,6 +4,7 @@ import hashlib
 import shutil
 from typing import List, Optional
 from dotenv import load_dotenv
+import redis
 
 # FastAPI Imports
 from fastapi import FastAPI, UploadFile, File, Form
@@ -134,8 +135,16 @@ def ingest_documents(documents: List[Document]):
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     print(f"Connecting to Redis at {redis_url}...")
     
-    # Base Redis store handles raw bytes
-    redis_store = RedisStore(redis_url=redis_url, namespace="gov-docs-parents")
+    # Create a robust Redis client with extended timeouts
+    redis_client = redis.Redis.from_url(
+        redis_url,
+        socket_timeout=120,          # Increase timeout to 120 seconds for large reads/writes
+        socket_connect_timeout=120,  # Increase connection timeout
+        retry_on_timeout=True        # Automatically retry if a timeout occurs
+    )
+    
+    # Base Redis store handles raw bytes using our robust client
+    redis_store = RedisStore(client=redis_client, namespace="gov-docs-parents")
     
     # EncoderBackedStore wraps Redis so it can serialize LangChain Document objects
     store = EncoderBackedStore(
