@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 
 # LangChain Imports
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader, JSONLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
@@ -69,11 +69,11 @@ async def root():
         <body>
             <div class="container">
                 <h2>RAG Pipeline Ingestion</h2>
-                <p>Upload a PDF and add dynamic metadata to enable strict Pinecone filtering during retrieval.</p>
+                <p>Upload a PDF, JSONL, or TXT file and add dynamic metadata to enable strict Pinecone filtering during retrieval.</p>
                 <form action="/ingest/" enctype="multipart/form-data" method="post">
                     <div class="form-group">
-                        <label>PDF Document *</label>
-                        <input name="file" type="file" accept=".pdf" required>
+                        <label>Document *</label>
+                        <input name="file" type="file" accept=".pdf,.jsonl,.txt" required>
                     </div>
                     
                     <label>Custom Metadata (Optional)</label>
@@ -210,8 +210,15 @@ async def ingest_endpoint(
         if file.filename.endswith(".pdf"):
             loader = PyPDFLoader(file_path)
             documents = loader.load()
+        elif file.filename.endswith(".jsonl"):
+            # Using the same schema from your initial notebook
+            loader = JSONLoader(file_path=file_path, jq_schema=".text", json_lines=True)
+            documents = loader.load()
+        elif file.filename.endswith(".txt"):
+            loader = TextLoader(file_path)
+            documents = loader.load()
         else:
-            return {"error": "Currently only PDF files are supported."}
+            return {"error": f"File type '{file.filename}' is not supported. Please upload a .pdf, .jsonl, or .txt file."}
             
         # 3. Inject dynamic metadata from the form
         custom_metadata = {}

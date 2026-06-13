@@ -161,7 +161,7 @@ def answer_question_with_reranking(question: str, metadata_filter: dict = None):
         print(f"[!] Generation failed: {e}")
 
 if __name__ == "__main__":
-    test_question = "How did the introduction of the pregnancy checkbox on death certificates both improve and complicate the identification of maternal deaths, and what specific actions did CDC take between 2016 and 2020 to address the resulting data quality concerns before resuming publication of maternal mortality statistics?"
+    test_question = "what information does it provide?"
     
     # Example 1: Standard query (No filtering)
     print("--- Example 1: Unfiltered Query ---")
