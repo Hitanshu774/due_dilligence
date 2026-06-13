@@ -72,12 +72,12 @@ parent_retriever = ParentDocumentRetriever(
 # 2. RERANKER & LLMLINGUA PIPELINE
 print("Initializing Compression Pipeline...")
 cross_encoder = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-reranker = CrossEncoderReranker(model=cross_encoder, top_n=3)
+reranker = CrossEncoderReranker(model=cross_encoder, top_n=5)
 
 llm_lingua_compressor = LLMLinguaCompressor(
     model_name="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
     device_map="cpu",
-    target_token=300
+    target_token=600
 )
 
 pipeline_compressor = DocumentCompressorPipeline(
