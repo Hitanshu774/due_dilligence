@@ -161,7 +161,7 @@ def answer_question_with_reranking(question: str, metadata_filter: dict = None):
         print(f"[!] Generation failed: {e}")
 
 if __name__ == "__main__":
-    test_question = "what information does it provide?"
+    test_question = "How do DOD's depot maintenance facilities differ from DOD's Federally Funded Research and Development Centers (FFRDCs) in terms of their primary mission and organizational structure?"
     
     # Example 1: Standard query (No filtering)
     print("--- Example 1: Unfiltered Query ---")
@@ -172,5 +172,6 @@ if __name__ == "__main__":
     print("\n--- Example 2: Filtered Query ---")
     answer_question_with_reranking(
         test_question, 
-        metadata_filter={"agency": "CDC"} 
+        # metadata_filter={"agency": "CDC"} 
     )
+
