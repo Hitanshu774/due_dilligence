@@ -11,7 +11,6 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langchain_openrouter import ChatOpenRouter
 from pinecone import Pinecone
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 # Parent-Child
 from langchain_classic.retrievers import ParentDocumentRetriever
@@ -118,18 +117,34 @@ Context:
 """
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=2, max=15), reraise=True)
-def robust_retrieve(question: str):
+def robust_retrieve(question: str, metadata_filter: dict = None):
+    """
+    Retrieves documents with optional metadata filtering pushed down to Pinecone.
+    """
+    if metadata_filter:
+        # Dynamically inject the Pinecone filter into the search_kwargs
+        parent_retriever.search_kwargs["filter"] = metadata_filter
+        print(f"[*] Applying metadata filter: {metadata_filter}")
+    else:
+        # Ensure no lingering filters are applied from previous queries in the session
+        parent_retriever.search_kwargs.pop("filter", None)
+        
     return compression_retriever.invoke(question)
 
-def answer_question_with_reranking(question: str):
+def answer_question_with_reranking(question: str, metadata_filter: dict = None):
     print(f"\n[?] Question: {question}")
     
     try:
-        docs = robust_retrieve(question)
+        # Pass the filter down to our robust retrieval function
+        docs = robust_retrieve(question, metadata_filter)
         print(f"[*] Retrieved & Compressed down to {len(docs)} highly relevant documents.")
     except Exception as e:
         print(f"[!] Retrieval failed: {e}")
         return
+    
+    if not docs:
+        print("[!] No documents found matching the query and filters.")
+        return "I could not find any relevant documents matching those constraints."
     
     context = "\n\n".join(doc.page_content for doc in docs)
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(context=context)
@@ -147,4 +162,15 @@ def answer_question_with_reranking(question: str):
 
 if __name__ == "__main__":
     test_question = "How did the introduction of the pregnancy checkbox on death certificates both improve and complicate the identification of maternal deaths, and what specific actions did CDC take between 2016 and 2020 to address the resulting data quality concerns before resuming publication of maternal mortality statistics?"
+    
+    # Example 1: Standard query (No filtering)
+    print("--- Example 1: Unfiltered Query ---")
     answer_question_with_reranking(test_question)
+    
+    # Example 2: Query with Metadata Filtering
+    # This will strictly limit Pinecone vector matches to chunks where the 'agency' is 'CDC' and 'year' is '2023'
+    print("\n--- Example 2: Filtered Query ---")
+    answer_question_with_reranking(
+        test_question, 
+        metadata_filter={"agency": "CDC"} 
+    )

@@ -2,11 +2,11 @@ import os
 import json
 import hashlib
 import shutil
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
 # FastAPI Imports
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import HTMLResponse
 import uvicorn
 
@@ -29,7 +29,7 @@ app = FastAPI(title="RAG Ingestion API")
 # --- DIRECT HTML UPLOAD PAGE ---
 @app.get("/")
 async def root():
-    """Serves a simple HTML UI for uploading files directly from the browser."""
+    """Serves a simple HTML UI for uploading files and attaching dynamic metadata."""
     html_content = """
     <!DOCTYPE html>
     <html>
@@ -37,20 +37,51 @@ async def root():
             <title>RAG Document Ingestion</title>
             <style>
                 body { font-family: sans-serif; margin: 40px; display: flex; justify-content: center; background-color: #f4f4f9; }
-                .container { background: white; border: 1px solid #ccc; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 500px; width: 100%; }
+                .container { background: white; border: 1px solid #ccc; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 600px; width: 100%; }
                 h2 { margin-top: 0; color: #333; }
-                p { color: #666; margin-bottom: 20px; }
-                input[type=file] { margin-bottom: 20px; width: 100%; }
-                .btn { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; }
+                p { color: #666; margin-bottom: 20px; font-size: 14px; }
+                .form-group { margin-bottom: 15px; }
+                label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; font-size: 14px; }
+                input[type=text], input[type=number], input[type=file] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+                .btn { padding: 12px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px; font-weight: bold; }
                 .btn:hover { background-color: #0056b3; }
+                .btn-add { background-color: #28a745; margin-bottom: 15px; width: auto; font-size: 14px; padding: 8px 12px; }
+                .btn-add:hover { background-color: #218838; }
+                .btn-remove { background-color: #dc3545; padding: 10px; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+                .btn-remove:hover { background-color: #c82333; }
+                .metadata-row { display: flex; gap: 10px; margin-bottom: 10px; }
+                .metadata-row input { margin-bottom: 0; }
             </style>
+            <script>
+                function addMetadataField() {
+                    const container = document.getElementById('metadata-fields');
+                    const div = document.createElement('div');
+                    div.className = 'metadata-row';
+                    div.innerHTML = `
+                        <input name="metadata_keys" type="text" placeholder="Key (e.g., year)" required>
+                        <input name="metadata_values" type="text" placeholder="Value (e.g., 2023)" required>
+                        <button type="button" class="btn-remove" onclick="this.parentElement.remove()">X</button>
+                    `;
+                    container.appendChild(div);
+                }
+            </script>
         </head>
         <body>
             <div class="container">
                 <h2>RAG Pipeline Ingestion</h2>
-                <p>Select a PDF file to chunk, embed, and ingest into Pinecone and Redis.</p>
+                <p>Upload a PDF and add dynamic metadata to enable strict Pinecone filtering during retrieval.</p>
                 <form action="/ingest/" enctype="multipart/form-data" method="post">
-                    <input name="file" type="file" accept=".pdf" required>
+                    <div class="form-group">
+                        <label>PDF Document *</label>
+                        <input name="file" type="file" accept=".pdf" required>
+                    </div>
+                    
+                    <label>Custom Metadata (Optional)</label>
+                    <div id="metadata-fields">
+                        <!-- Dynamic fields will be added here -->
+                    </div>
+                    <button type="button" class="btn btn-add" onclick="addMetadataField()">+ Add Metadata Field</button>
+                    
                     <button class="btn" type="submit">Upload & Ingest</button>
                 </form>
             </div>
@@ -132,6 +163,7 @@ def ingest_documents(documents: List[Document]):
     # B. Generate deterministic IDs based on content and metadata
     unique_parents = {}
     for doc in parent_docs:
+        # Include metadata in the hash so identical text with different metadata is treated uniquely
         doc_string = doc.page_content + json.dumps(doc.metadata, sort_keys=True)
         doc_id = hashlib.md5(doc_string.encode("utf-8")).hexdigest()
         unique_parents[doc_id] = doc
@@ -163,7 +195,11 @@ def ingest_documents(documents: List[Document]):
 
 # --- FASTAPI FILE UPLOAD ENDPOINT ---
 @app.post("/ingest/")
-async def ingest_endpoint(file: UploadFile = File(...)):
+async def ingest_endpoint(
+    file: UploadFile = File(...),
+    metadata_keys: List[str] = Form([]),
+    metadata_values: List[str] = Form([])
+):
     # 1. Save uploaded file temporarily
     file_path = f"temp_{file.filename}"
     with open(file_path, "wb") as buffer:
@@ -177,13 +213,30 @@ async def ingest_endpoint(file: UploadFile = File(...)):
         else:
             return {"error": "Currently only PDF files are supported."}
             
-        # 3. Pass directly to your newly generalized ingestion function!
+        # 3. Inject dynamic metadata from the form
+        custom_metadata = {}
+        for k, v in zip(metadata_keys, metadata_values):
+            key = k.strip()
+            val = v.strip()
+            if key and val:
+                # Convert to integer if it's a number (for correct Pinecone filtering)
+                if val.isdigit():
+                    val = int(val)
+                custom_metadata[key] = val
+
+        for doc in documents:
+            doc.metadata.update(custom_metadata)
+            
+        # 4. Pass directly to your newly generalized ingestion function!
         ingest_documents(documents)
         
-        return {"message": f"Successfully ingested {len(documents)} document pages!"}
+        return {
+            "message": f"Successfully ingested {len(documents)} document pages!",
+            "metadata_applied": custom_metadata
+        }
         
     finally:
-        # 4. Clean up the temporary file so we don't fill up the disk
+        # 5. Clean up the temporary file so we don't fill up the disk
         if os.path.exists(file_path):
             os.remove(file_path)
 
