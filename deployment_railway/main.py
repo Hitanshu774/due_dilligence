@@ -20,7 +20,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain_classic.retrievers import ParentDocumentRetriever
 from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
+from langchain_classic.retrievers import EnsembleRetriever
 from langchain_community.storage import RedisStore
 from langchain_classic.storage import EncoderBackedStore
 from langchain_core.documents import Document, BaseDocumentCompressor
