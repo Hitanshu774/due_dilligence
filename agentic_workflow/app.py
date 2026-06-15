@@ -44,7 +44,8 @@ def generate_due_diligence_memo(user_query, history):
 # ==========================================
 # Build the Gradio UI
 # ==========================================
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
+# Removed the theme parameter from Blocks to fix the UserWarning
+with gr.Blocks() as demo:
     gr.Markdown(
         """
         # 🕵️‍♂️ Due Diligence & Research Assistant
@@ -58,13 +59,13 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     # Use ChatInterface for a clean, modern chat experience
     chat_interface = gr.ChatInterface(
         fn=generate_due_diligence_memo,
-        chatbot=gr.Chatbot(height=600, show_copy_button=True),
+        # Removed show_copy_button=True to fix the TypeError
+        chatbot=gr.Chatbot(height=600),
         textbox=gr.Textbox(
             placeholder="e.g., What are the DOD rules for depot maintenance, and is there any recent news about violations?", 
             container=False, 
             scale=7
-        ),
-        theme="soft",
+        )
     )
 
 if __name__ == "__main__":
