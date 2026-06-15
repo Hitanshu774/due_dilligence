@@ -1,81 +1,73 @@
 import gradio as gr
+from langchain_core.messages import HumanMessage
+import sys
 import os
-from dotenv import load_dotenv
-from langsmith import traceable
 
-# Load environment variables from .env file
-load_dotenv()
+# Ensure the parent directory is in the path so we can import the graph
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# IMPORTANT: Import our actual compiled graph!
-from due_dilligence.agentic_workflow.graph import compiled_graph
+from agentic_workflow.graph import app_graph
 
-# ==========================================
-# 1. EXECUTION FUNCTION
-# ==========================================
-
-def run_due_diligence(user_query: str):
+def generate_due_diligence_memo(user_query, history):
+    """
+    Takes the user's query from Gradio, passes it to the LangGraph orchestrator,
+    and returns the final synthesized memo.
+    """
+    print(f"\n[UI] Received new query: {user_query}")
     
-    # 1. Setup the initial state
+    # 1. Initialize the state exactly as LangGraph expects
     initial_state = {
         "user_query": user_query,
-        "plan": [],
-        "internal_evidence": [],
-        "external_evidence": [],
-        "contradictions": [],
-        "final_memo": "",
-        "revision_count": 0
+        "messages": [HumanMessage(content=user_query)]
     }
     
-    output_log = f"🚀 Starting Due Diligence for: '{user_query}'\n"
-    output_log += "-" * 40 + "\n"
-    yield output_log 
-    
-    # 2. Execute the REAL graph using .stream()
     try:
-        # We use stream_mode="updates" to yield each node's output as it finishes
-        for event in compiled_graph.stream(initial_state, stream_mode="updates"):
+        # 2. Invoke the compiled graph (Synchronous execution)
+        # This will trigger the Planner -> Retrievers -> Contradiction Checker -> Memo Writer
+        print("[UI] Invoking Multi-Agent Graph...")
+        result = app_graph.invoke(initial_state)
+        
+        # 3. Extract the final memo from the returned state
+        final_memo = result.get("final_memo")
+        
+        if final_memo:
+            print("[UI] Memo generated successfully!")
+            return final_memo
+        else:
+            return "⚠️ The agents completed their run, but no final memo was generated. Check the terminal logs."
             
-            for node_name, state_update in event.items():
-                output_log += f"✅ {node_name} Node Completed.\n"
-                
-                # If the Writer node runs, append the actual memo to the UI
-                if node_name == "Writer":
-                    output_log += "\n" + "="*40 + "\n"
-                    output_log += f"{state_update['final_memo']}\n"
-                
-                yield output_log 
-                
     except Exception as e:
-        yield f"❌ Error occurred: {str(e)}"
+        error_msg = f"❌ An error occurred during the multi-agent workflow: {str(e)}"
+        print(error_msg)
+        return error_msg
 
 # ==========================================
-# 2. GRADIO UI SETUP
+# Build the Gradio UI
 # ==========================================
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("# 🕵️‍♂️ AI Due-Diligence Agent (LangGraph + LangSmith)")
-    gr.Markdown("Enter a query like 'financial' or 'compliance' to test the mock nodes.")
+    gr.Markdown(
+        """
+        # 🕵️‍♂️ Due Diligence & Research Assistant
+        **A LangGraph Multi-Agent System**
+        
+        This assistant breaks down your query, searches internal government documents via a local RAG microservice, 
+        conducts external web research, checks for contradictions, and synthesizes a final citation-backed memo.
+        """
+    )
     
-    with gr.Row():
-        with gr.Column(scale=1):
-            query_input = gr.Textbox(
-                label="Research Query", 
-                placeholder="Type 'financial' to see contradiction logic trigger..."
-            )
-            submit_btn = gr.Button("Run Analysis", variant="primary")
-            
-        with gr.Column(scale=2):
-            output_display = gr.Textbox(
-                label="Agent Reasoning & Output", 
-                lines=15, 
-                interactive=False
-            )
-            
-    submit_btn.click(
-        fn=run_due_diligence,
-        inputs=[query_input],
-        outputs=[output_display]
+    # Use ChatInterface for a clean, modern chat experience
+    chat_interface = gr.ChatInterface(
+        fn=generate_due_diligence_memo,
+        chatbot=gr.Chatbot(height=600, show_copy_button=True),
+        textbox=gr.Textbox(
+            placeholder="e.g., What are the DOD rules for depot maintenance, and is there any recent news about violations?", 
+            container=False, 
+            scale=7
+        ),
+        theme="soft",
     )
 
 if __name__ == "__main__":
-    # Launch the Gradio app
-    demo.launch()
+    print("Starting Gradio Server...")
+    # launch(share=True) gives you a public link to share with others!
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
