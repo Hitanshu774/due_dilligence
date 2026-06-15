@@ -113,3 +113,45 @@ def internal_retrieval_node(state: AgentState):
     except requests.exceptions.RequestException as e:
         print(f"  -> [!] Microservice connection failed. Is uvicorn running? Error: {e}")
         return {"internal_evidence": "Failed to connect to internal RAG database."}
+    
+# ====================================================================
+# 4. EXTERNAL RETRIEVAL NODE (Agent 3)
+# ====================================================================
+def external_retrieval_node(state: AgentState):
+    """
+    Reads the plan, takes the external query, and calls the Tavily Search API.
+    """
+    from langchain_community.tools.tavily_search import TavilySearchResults
+    
+    plan = state.get("plan", {})
+    external_query = plan.get("external_search_query", "")
+    
+    print(f"\n[Agent: External Retrieval] Searching the web for: '{external_query}'")
+    
+    if not external_query:
+        return {"external_evidence": "No external query provided by planner."}
+    
+    try:
+        # Initialize Tavily Search (Automatically reads TAVILY_API_KEY from .env)
+        # We limit max_results to 3 to avoid overflowing the LLM's context window
+        search_tool = TavilySearchResults(max_results=3)
+        
+        # Execute the search
+        raw_results = search_tool.invoke({"query": external_query})
+        
+        # Format the output into a readable string for the downstream LLM agents
+        evidence = ""
+        for i, hit in enumerate(raw_results):
+            url = hit.get('url', 'Unknown URL')
+            content = hit.get('content', 'No content')
+            evidence += f"--- Web Source {i+1} ---\nURL: {url}\nContent: {content}\n\n"
+        
+        print(f"  -> Successfully retrieved top {len(raw_results)} web sources.")
+        
+        # Write the web findings back to the global state
+        return {"external_evidence": evidence}
+        
+    except Exception as e:
+        error_msg = f"Tavily Search API Error: {str(e)}"
+        print(f"  -> [!] {error_msg}")
+        return {"external_evidence": error_msg}
