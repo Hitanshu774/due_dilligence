@@ -155,3 +155,50 @@ def external_retrieval_node(state: AgentState):
         error_msg = f"Tavily Search API Error: {str(e)}"
         print(f"  -> [!] {error_msg}")
         return {"external_evidence": error_msg}
+    
+# ====================================================================
+# 5. CONTRADICTION DETECTION NODE (Agent 4)
+# ====================================================================
+def contradiction_node(state: AgentState):
+    """
+    Analyzes internal and external evidence for discrepancies or contradictions.
+    """
+    internal = state.get("internal_evidence", "No internal evidence retrieved.")
+    external = state.get("external_evidence", "No external evidence retrieved.")
+    
+    print("\n[Agent: Contradiction Checker] Analyzing evidence for inconsistencies...")
+    
+    # Initialize the LLM (Using a smart model with low temperature for logical reasoning)
+    llm = ChatOpenRouter(model="nvidia/nemotron-3.5-content-safety:free", temperature=0.1)
+    
+    system_prompt = """
+    You are a meticulous due-diligence verification analyst.
+    Your task is to compare two sets of information: 'Internal Evidence' (from proprietary documents) and 'External Evidence' (from public web searches).
+    
+    Analyze them and provide a brief report highlighting:
+    1. Agreements: Where do the sources align?
+    2. Discrepancies/Contradictions: Where do they disagree or present conflicting facts?
+    
+    If there are no contradictions, explicitly state that the sources align.
+    Do NOT answer the user's original question. ONLY report on the relationship between the two evidence sets.
+    Keep your analysis concise, structured, and factual.
+    """
+    
+    user_prompt = f"--- INTERNAL EVIDENCE ---\n{internal}\n\n--- EXTERNAL EVIDENCE ---\n{external}"
+    
+    try:
+        # Invoke the LLM to perform the comparison
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ])
+        
+        print("  -> Contradiction analysis complete.")
+        
+        # Save the analysis to the global state
+        return {"contradictions": response.content}
+    
+    except Exception as e:
+        error_msg = f"Error during contradiction analysis: {str(e)}"
+        print(f"  -> [!] {error_msg}")
+        return {"contradictions": error_msg}
