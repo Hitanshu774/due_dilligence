@@ -1,134 +1,115 @@
-# from langchain_openai import ChatOpenAI
-from langchain_core.output_parsers import PydanticOutputParser
+import os
+import requests
+from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_openrouter import ChatOpenRouter
-from due_dilligence.agentic_workflow.state import DueDiligenceState, PlannerOutput
-from due_dilligence.agentic_workflow.tools import search_internal_documents, search_external_web
+from langchain_openrouter import ChatOpenRouter  # Using OpenRouter based on your previous config
+# from langchain_openai import ChatOpenAI # Uncomment if using direct OpenAI
 
-# Initialize our LLM (using gpt-4o-mini for speed and cost-effectiveness)
-# Make sure OPENAI_API_KEY is in your .env file!
-llm = ChatOpenRouter(model="nvidia/nemotron-3-super-120b-a12b:free")
+from .state import AgentState
 
-# ==========================================
-# 1. PLANNER NODE
-# ==========================================
-def plan_node(state: DueDiligenceState):
-    """Uses LLM to break the user query into structured tasks."""
+load_dotenv()
+
+# ====================================================================
+# 1. SCHEMAS
+# ====================================================================
+class ResearchPlan(BaseModel):
+    """Schema for the Planner Agent to format its output."""
+    internal_search_query: str = Field(
+        ..., 
+        description="Search query to send to the internal RAG database for private policies/data."
+    )
+    external_search_query: str = Field(
+        ..., 
+        description="Search query to execute on the public web for recent news/context."
+    )
+    reasoning: str = Field(
+        ..., 
+        description="Brief explanation of why these queries were chosen."
+    )
+
+# ====================================================================
+# 2. PLANNER NODE (Agent 1)
+# ====================================================================
+def planner_node(state: AgentState):
+    """
+    Decomposes the complex user query into specific internal and external search queries.
+    """
     query = state.get("user_query", "")
+    print(f"\n[Agent: Planner] Analyzing query: '{query}'")
     
-    # FIX: Use PydanticOutputParser instead of .with_structured_output 
-    # This is much more resilient to API formatting quirks and safety proxies.
-    parser = PydanticOutputParser(pydantic_object=PlannerOutput)
+    # Initialize the LLM
+    llm = ChatOpenRouter(model="openrouter/owl-alpha", temperature=0.1) 
+    structured_llm = llm.with_structured_output(ResearchPlan)
     
-    # FIX: Softened prompt to bypass "Unauthorized Advice" safety filters
-    sys_prompt = f"""You are a helpful research assistant organizing a search strategy. 
-    Break the user's query into exactly 2 simple information-gathering tasks: one for internal documents, one for external web search.
-    Do not provide any advice.
-    
-    {parser.get_format_instructions()}
+    system_prompt = """
+    You are a lead due-diligence research planner.
+    Your job is to take a complex user query and break it down into two optimized search queries:
+    1. An internal query for our secure government document database.
+    2. An external query for the public web.
+    Extract the core entities, intent, and be precise.
     """
     
-    # Invoke the standard LLM (no json_mode forcing needed)
-    result = llm.invoke([
-        SystemMessage(content=sys_prompt),
-        HumanMessage(content=query)
-    ])
-    
-    # Safely attempt to parse the output
+    # Invoke the LLM to get a structured plan
     try:
-        parsed_result = parser.invoke(result)
-        # Convert Pydantic objects back to dicts to store in the state safely
-        tasks = [task.model_dump() for task in parsed_result.tasks]
-    except Exception as e:
-        print(f"⚠️ Parsing failed (likely a safety filter or weird LLM output). Error: {e}")
-        print("Fallback to default tasks.")
-        # Fallback tasks to prevent the graph from crashing
-        tasks = [
-            {"task_id": "1", "description": f"Internal search for {query}", "source_type": "internal"},
-            {"task_id": "2", "description": f"External search for {query}", "source_type": "external"}
-        ]
+        plan: ResearchPlan = structured_llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=query)
+        ])
         
-    return {"plan": tasks}
-# ==========================================
-# 2. RETRIEVER NODE
-# ==========================================
-def retrieve_node(state: DueDiligenceState):
-    """Executes the plan using tools. (No LLM needed here, just logic!)"""
-    internal_results = []
-    external_results = []
-    
-    for task in state.get("plan", []):
-        if task["source_type"] == "internal":
-            # Notice how we pass the LLM-generated description directly to the tool!
-            result = search_internal_documents.invoke(task["description"])
-            internal_results.append(result)
-        else:
-            result = search_external_web.invoke(task["description"])
-            external_results.append(result)
-            
-    return {
-        "internal_evidence": internal_results, 
-        "external_evidence": external_results
-    }
-
-# ==========================================
-# 3. VERIFIER NODE
-# ==========================================
-def verify_node(state: DueDiligenceState):
-    """Uses LLM to check for contradictions between internal and external evidence."""
-    internal = "\n".join(state.get("internal_evidence", []))
-    external = "\n".join(state.get("external_evidence", []))
-    
-    # FIX: Softened prompt to bypass safety filters. Removed "risk analyst".
-    prompt = f"""
-    You are a text comparison assistant. Compare Text A (Internal Evidence) with Text B (External Evidence).
-    Identify any factual differences or contradictions between the two texts. 
-    If there are none, say "No major contradictions found."
-    Do not provide financial advice.
-    
-    Text A (Internal):
-    {internal}
-    
-    Text B (External):
-    {external}
-    """
-    
-    # FIX: Added try/except to prevent the app from freezing if the API hangs
-    try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        content = response.content
+        print(f"  -> Internal Query: {plan.internal_search_query}")
+        print(f"  -> External Query: {plan.external_search_query}")
+        
+        # Write the plan back to the global state
+        return {"plan": plan.model_dump()}
+        
     except Exception as e:
-        print(f"⚠️ Verifier LLM Error: {e}")
-        content = f"Verification skipped due to API error: {e}"
-    
-    return {"contradictions": [content]}
+        print(f"[!] Planner Node Failed: {e}")
+        return {"plan": {"error": str(e)}}
 
-# ==========================================
-# 4. WRITER NODE
-# ==========================================
-def write_node(state: DueDiligenceState):
-    """Synthesizes the final memo using the LLM."""
-    internal = "\n- ".join(state.get("internal_evidence", []))
-    external = "\n- ".join(state.get("external_evidence", []))
-    issues = "\n- ".join(state.get("contradictions", []))
-    
-    prompt = f"""
-    Write a professional Due Diligence Memo based on the following findings.
-    Be concise, objective, and clearly state any risks.
-    
-    Internal Findings:
-    {internal}
-    
-    External Findings:
-    {external}
-    
-    Risk & Verification Analysis:
-    {issues}
+
+# ====================================================================
+# 3. INTERNAL RETRIEVAL NODE (Agent 2)
+# ====================================================================
+def internal_retrieval_node(state: AgentState):
     """
+    Reads the plan, takes the internal query, and calls our local RAG microservice.
+    """
+    plan = state.get("plan", {})
+    internal_query = plan.get("internal_search_query", "")
     
-    response = llm.invoke([
-        SystemMessage(content="You are a meticulous financial/legal analyst writing a final report."),
-        HumanMessage(content=prompt)
-    ])
+    print(f"\n[Agent: Internal Retrieval] Searching database for: '{internal_query}'")
     
-    return {"final_memo": response.content}
+    if not internal_query:
+        return {"internal_evidence": "No internal query provided by planner."}
+    
+    # URL of the local FastAPI RAG Microservice we just started
+    RAG_API_URL = "http://localhost:8000/query"
+    
+    payload = {
+        "question": internal_query,
+        # "filters": {"agency": "CDC"} # Optional: We could let the planner output metadata filters too!
+    }
+    
+    try:
+        # Ping the microservice
+        response = requests.post(RAG_API_URL, json=payload, timeout=60)
+        
+        if response.status_code == 200:
+            data = response.json()
+            evidence = data.get("answer", "No answer generated.")
+            source_count = data.get("source_count", 0)
+            
+            print(f"  -> Found internal evidence from {source_count} sources.")
+            
+            # Write the findings back to the global state
+            return {"internal_evidence": evidence}
+        else:
+            error_msg = f"API Error {response.status_code}: {response.text}"
+            print(f"  -> [!] {error_msg}")
+            return {"internal_evidence": error_msg}
+            
+    except requests.exceptions.RequestException as e:
+        print(f"  -> [!] Microservice connection failed. Is uvicorn running? Error: {e}")
+        return {"internal_evidence": "Failed to connect to internal RAG database."}
