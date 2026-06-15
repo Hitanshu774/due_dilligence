@@ -202,3 +202,73 @@ def contradiction_node(state: AgentState):
         error_msg = f"Error during contradiction analysis: {str(e)}"
         print(f"  -> [!] {error_msg}")
         return {"contradictions": error_msg}
+
+# ====================================================================
+# 6. MEMO WRITER NODE (Agent 5)
+# ====================================================================
+def memo_writer_node(state: AgentState):
+    """
+    Synthesizes all evidence and the contradiction report into a final due-diligence memo.
+    """
+    query = state.get("user_query", "No query provided.")
+    internal = state.get("internal_evidence", "None.")
+    external = state.get("external_evidence", "None.")
+    contradictions = state.get("contradictions", "None detected.")
+    
+    print("\n[Agent: Memo Writer] Drafting the final due-diligence report...")
+    
+    # Initialize the LLM (Using a slightly higher temperature for natural language generation)
+    llm = ChatOpenRouter(model="nvidia/nemotron-3-super-120b-a12b:free", temperature=0.2)
+    
+    system_prompt = """
+    You are a Senior Due-Diligence Analyst. 
+    Your task is to write a final, comprehensive analytical memo answering the user's query.
+    
+    You must use ONLY the provided Internal Evidence, External Evidence, and Contradiction Report.
+    
+    Structure your memo professionally using Markdown:
+    1. **Executive Summary:** A brief, direct answer to the query.
+    2. **Internal Findings:** Insights strictly from the internal documents.
+    3. **External Context:** Relevant public/web information.
+    4. **Discrepancy Analysis:** A summary of any contradictions or alignments between internal and external sources.
+    5. **Conclusion & Recommendations:** Final synthesized thoughts.
+    
+    Crucial Rule: You MUST include inline citations. 
+    - When citing internal docs, use [Internal RAG].
+    - When citing web sources, cite the URL or Source Name, e.g., [Web Source 1].
+    If evidence is lacking to fully answer the query, clearly state what is missing.
+    """
+    
+    user_prompt = f"""
+    --- USER QUERY ---
+    {query}
+    
+    --- INTERNAL EVIDENCE ---
+    {internal}
+    
+    --- EXTERNAL EVIDENCE ---
+    {external}
+    
+    --- CONTRADICTION / ALIGNMENT REPORT ---
+    {contradictions}
+    """
+    
+    try:
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ])
+        
+        print("  -> Final memo successfully generated.")
+        
+        # Save the final memo to the state and add the final AI message to the chat history
+        from langchain_core.messages import AIMessage
+        return {
+            "final_memo": response.content,
+            "messages": [AIMessage(content=response.content)]
+        }
+        
+    except Exception as e:
+        error_msg = f"Error generating final memo: {str(e)}"
+        print(f"  -> [!] {error_msg}")
+        return {"final_memo": error_msg}
