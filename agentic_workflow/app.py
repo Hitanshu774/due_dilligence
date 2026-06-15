@@ -7,13 +7,7 @@ from langsmith import traceable
 load_dotenv()
 
 # IMPORTANT: Import our actual compiled graph!
-from graph import compiled_graph
-
-# ==========================================
-# 0. LANGSMITH & API CONFIGURATION
-# ==========================================
-# We no longer need to hardcode os.environ[] here because load_dotenv() 
-# securely pulls them from the .env file!
+from due_dilligence.agentic_workflow.graph import compiled_graph
 
 # ==========================================
 # 1. EXECUTION FUNCTION

@@ -2,8 +2,8 @@
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openrouter import ChatOpenRouter
-from state import DueDiligenceState, PlannerOutput
-from tools import search_internal_documents, search_external_web
+from due_dilligence.agentic_workflow.state import DueDiligenceState, PlannerOutput
+from due_dilligence.agentic_workflow.tools import search_internal_documents, search_external_web
 
 # Initialize our LLM (using gpt-4o-mini for speed and cost-effectiveness)
 # Make sure OPENAI_API_KEY is in your .env file!

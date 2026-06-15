@@ -1,7 +1,7 @@
 # Connecting nodes with edges
 from langgraph.graph import StateGraph, END
-from state import DueDiligenceState
-from nodes import plan_node, retrieve_node, verify_node, write_node
+from due_dilligence.agentic_workflow.state import DueDiligenceState
+from due_dilligence.agentic_workflow.nodes import plan_node, retrieve_node, verify_node, write_node
 
 # 1. Initialize Graph
 workflow = StateGraph(DueDiligenceState)
