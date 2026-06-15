@@ -2,10 +2,11 @@ import os
 import requests
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openrouter import ChatOpenRouter  # Using OpenRouter based on your previous config
 # from langchain_openai import ChatOpenAI # Uncomment if using direct OpenAI
+import requests
 
 from .state import AgentState
 
@@ -34,39 +35,53 @@ class ResearchPlan(BaseModel):
 # ====================================================================
 def planner_node(state: AgentState):
     """
-    Decomposes the complex user query into specific internal and external search queries.
+    Takes the user query and breaks it down into specific sub-queries
+    for the internal and external retrieval agents.
     """
-    query = state.get("user_query", "")
+    query = state["user_query"]
     print(f"\n[Agent: Planner] Analyzing query: '{query}'")
     
-    # Initialize the LLM
-    llm = ChatOpenRouter(model="openrouter/owl-alpha", temperature=0.1) 
-    structured_llm = llm.with_structured_output(ResearchPlan)
-    
-    system_prompt = """
-    You are a lead due-diligence research planner.
-    Your job is to take a complex user query and break it down into two optimized search queries:
-    1. An internal query for our secure government document database.
-    2. An external query for the public web.
-    Extract the core entities, intent, and be precise.
-    """
-    
-    # Invoke the LLM to get a structured plan
     try:
-        plan: ResearchPlan = structured_llm.invoke([
+        # Initialize our LLM (Adjust the model name to your OpenRouter preference if needed)
+        llm = ChatOpenRouter(model="nvidia/nemotron-3-ultra-550b-a55b:free", temperature=0.1) 
+        
+        # Initialize the universal JSON parser
+        parser = PydanticOutputParser(pydantic_object=ResearchPlan)
+        
+        system_prompt = f"""
+        You are a lead due-diligence research planner.
+        Your job is to take a complex user query and break it down into two highly optimized search queries:
+        1. An internal query for our secure RAG document database.
+        2. An external query for the public web.
+        Be precise and focus on extracting the core entities and intent.
+        
+        {parser.get_format_instructions()}
+        """
+        
+        # We invoke the standard LLM (No tool_choice required)
+        response = llm.invoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=query)
         ])
         
-        print(f"  -> Internal Query: {plan.internal_search_query}")
-        print(f"  -> External Query: {plan.external_search_query}")
+        # Parse the raw text output into our Pydantic object
+        plan = parser.invoke(response)
         
-        # Write the plan back to the global state
+        print(f"  -> Internal Query Generated: {plan.internal_search_query}")
+        print(f"  -> External Query Generated: {plan.external_search_query}")
+        print(f"  -> Reasoning: {plan.reasoning}")
+        
         return {"plan": plan.model_dump()}
         
     except Exception as e:
         print(f"[!] Planner Node Failed: {e}")
-        return {"plan": {"error": str(e)}}
+        # Safe Fallback: If it fails, default to passing the raw user query to the search agents
+        print("  -> Using raw query as fallback.")
+        return {"plan": {
+            "internal_search_query": query,
+            "external_search_query": query,
+            "reasoning": "Fallback activated due to parsing error."
+        }}
 
 
 # ====================================================================
@@ -94,7 +109,7 @@ def internal_retrieval_node(state: AgentState):
     
     try:
         # Ping the microservice
-        response = requests.post(RAG_API_URL, json=payload, timeout=60)
+        response = requests.post(RAG_API_URL, json=payload, timeout=180)
         
         if response.status_code == 200:
             data = response.json()
@@ -121,7 +136,7 @@ def external_retrieval_node(state: AgentState):
     """
     Reads the plan, takes the external query, and calls the Tavily Search API.
     """
-    from langchain_community.tools.tavily_search import TavilySearchResults
+    from langchain_community.tools.tavily_search import TavilySearchResults   
     
     plan = state.get("plan", {})
     external_query = plan.get("external_search_query", "")
